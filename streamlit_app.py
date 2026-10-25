@@ -19,11 +19,12 @@ def create_session():
         st.secrets["connections"]["snowflake"]
     )
 
-    # Keep the database and schema consistent
     connection_parameters["database"] = "SMOOTHIES"
     connection_parameters["schema"] = "PUBLIC"
 
-    return Session.builder.configs(connection_parameters).create()
+    return Session.builder.configs(
+        connection_parameters
+    ).create()
 
 
 try:
@@ -36,12 +37,14 @@ try:
         .collect()
     )
 
-    fruit_options = [row["FRUIT_NAME"] for row in fruit_rows]
+    fruit_options = [
+        row["FRUIT_NAME"] for row in fruit_rows
+    ]
 
     # Choose up to 5 ingredients
     ingredients_list = st.multiselect(
         "Choose up to 5 ingredients:",
-        fruit_options,
+        options=fruit_options,
         max_selections=5
     )
 
@@ -54,7 +57,9 @@ try:
             st.warning("Please choose at least one fruit.")
 
         else:
-            ingredients_string = " ".join(ingredients_list)
+            ingredients_string = " ".join(
+                ingredients_list
+            )
 
             insert_stmt = """
                 INSERT INTO SMOOTHIES.PUBLIC.ORDERS
@@ -71,10 +76,14 @@ try:
             ).collect()
 
             st.success(
-                f"Your smoothie is ordered, {name_on_order.strip()}!",
+                f"Your smoothie is ordered, "
+                f"{name_on_order.strip()}!",
                 icon="✅"
             )
 
-except Exception as e:
-    st.error("Unable to connect to Snowflake or load the fruits.")
-    st.exception(e)
+except Exception:
+    st.error(
+        "Unable to connect to Snowflake or load the fruits. "
+        "Check your Streamlit Secrets, credentials, "
+        "permissions, and Snowflake app logs."
+    )
