@@ -13,7 +13,6 @@ st.title("🥤 Customize Your Smoothie! 🥤")
 st.write("Choose the fruits you want in your custom smoothie!")
 
 name_on_order = st.text_input("Name on Smoothie:")
-
 st.write("The name on your smoothie will be:", name_on_order)
 
 
@@ -23,8 +22,13 @@ def create_session():
         st.secrets["connections"]["snowflake"]
     )
 
+    # Explicit Snowflake connection settings
+    connection_parameters["account"] = "IXFHMEC-EPB48038"
+    connection_parameters["user"] = "HARI24PRASATH2005"
     connection_parameters["database"] = "SMOOTHIES"
     connection_parameters["schema"] = "PUBLIC"
+    connection_parameters["warehouse"] = "COMPUTE_WH"
+    connection_parameters["role"] = "SYSADMIN"
 
     return Session.builder.configs(
         connection_parameters
@@ -69,7 +73,7 @@ try:
 
                 insert_stmt = """
                     INSERT INTO SMOOTHIES.PUBLIC.ORDERS
-                        (NAME_ON_ORDER, INGREDIENTS)
+                    (NAME_ON_ORDER, INGREDIENTS)
                     VALUES (?, ?)
                 """
 
