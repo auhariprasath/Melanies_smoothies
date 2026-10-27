@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -8,7 +7,7 @@ from snowflake.snowpark.functions import col
 st.title("🥤 Customize Your Smoothie! 🥤")
 st.write("Choose the fruits you want in your custom Smoothie!")
 
-# ORIGINAL Snowflake connection — keep this unchanged
+# Connect to Snowflake
 cnx = st.connection("snowflake")
 session = cnx.session()
 
@@ -23,7 +22,7 @@ my_dataframe = session.table(
 # Convert Snowpark DataFrame to Pandas DataFrame
 pd_df = my_dataframe.to_pandas()
 
-# Display the DataFrame
+# Temporarily display the DataFrame to check its values
 st.dataframe(pd_df, use_container_width=True)
 
 # Customer name
@@ -48,10 +47,10 @@ ingredients_string = ""
 
 if ingredients_list:
     for fruit_chosen in ingredients_list:
-        # Keep the display name and trailing space
-        ingredients_string += fruit_chosen + " "
+        # Preserve the display name in the saved order
+        ingredients_string += fruit_chosen
 
-        # Find corresponding API search term
+        # Find the corresponding API search term
         search_on = pd_df.loc[
             pd_df["FRUIT_NAME"] == fruit_chosen,
             "SEARCH_ON"
@@ -68,24 +67,32 @@ if ingredients_list:
         st.subheader(fruit_chosen + " Nutrition Information")
 
         try:
-            response = requests.get(
+            # Use SEARCH_ON rather than the display label
+            smoothiefroot_response = requests.get(
                 "https://my.smoothiefroot.com/api/fruit/"
                 + requests.utils.quote(str(search_on), safe=""),
                 timeout=10
             )
 
-            if response.status_code == 200:
-                sf_df = pd.json_normalize(response.json())
-                st.dataframe(sf_df, use_container_width=True)
+            if smoothiefroot_response.status_code == 200:
+                sf_df = pd.json_normalize(
+                    smoothiefroot_response.json()
+                )
 
-            elif response.status_code == 404:
+                st.dataframe(
+                    sf_df,
+                    use_container_width=True
+                )
+
+            elif smoothiefroot_response.status_code == 404:
                 st.info(
                     "Sorry, that fruit is not in our database."
                 )
 
             else:
                 st.warning(
-                    f"API returned HTTP {response.status_code}."
+                    f"API returned HTTP "
+                    f"{smoothiefroot_response.status_code}."
                 )
 
         except requests.RequestException as error:
@@ -110,7 +117,7 @@ if st.button("Submit Order"):
                 VALUES (?, ?)
                 """,
                 params=[
-                    ingredients_string,
+                    ingredients_string.strip(),
                     name_on_order.strip()
                 ]
             ).collect()
@@ -123,3 +130,5 @@ if st.button("Submit Order"):
 
         except Exception as error:
             st.error(f"Could not save your order: {error}")
+
+bro tis is my friends code please modify only for which tht i uses private key and then remining give me the ssame code
