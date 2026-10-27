@@ -2,9 +2,11 @@
 import streamlit as st
 import pandas as pd
 import requests
+import base64
 
+from cryptography.hazmat.primitives import serialization
 from snowflake.snowpark import Session
-from snowflake.snowpark.functions import col
+
 
 # --------------------------------------------------
 # PAGE CONFIGURATION
@@ -13,21 +15,45 @@ from snowflake.snowpark.functions import col
 st.set_page_config(
     page_title="Customize Your Smoothie",
     page_icon="🥤",
-    layout="wide"
+    layout="centered"
 )
 
 st.title("🥤 Customize Your Smoothie! 🥤")
 st.write("Choose the fruits you want in your custom Smoothie!")
 
+
 # --------------------------------------------------
-# SNOWFLAKE CONNECTION
+# SNOWFLAKE CONNECTION - KEY PAIR AUTHENTICATION
 # --------------------------------------------------
 
 @st.cache_resource
 def create_session():
-    connection_parameters = dict(
-        st.secrets["connections"]["snowflake"]
+    cfg = st.secrets["connections"]["snowflake"]
+
+    private_key_b64 = cfg["private_key_b64"].strip()
+    private_key_bytes = base64.b64decode(private_key_b64)
+
+    private_key = serialization.load_pem_private_key(
+        private_key_bytes,
+        password=None
     )
+
+    private_key_der = private_key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+
+    connection_parameters = {
+        "account": cfg["account"],
+        "user": cfg["user"],
+        "private_key": private_key_der,
+        "authenticator": "SNOWFLAKE_JWT",
+        "role": cfg.get("role", "SYSADMIN"),
+        "warehouse": cfg.get("warehouse", "COMPUTE_WH"),
+        "database": cfg.get("database", "SMOOTHIES"),
+        "schema": cfg.get("schema", "PUBLIC")
+    }
 
     return Session.builder.configs(
         connection_parameters
@@ -35,7 +61,7 @@ def create_session():
 
 
 # --------------------------------------------------
-# LOAD FRUIT OPTIONS FROM SNOWFLAKE
+# CONNECT AND LOAD FRUIT OPTIONS
 # --------------------------------------------------
 
 try:
@@ -53,11 +79,9 @@ try:
         fruit_name = row["FRUIT_NAME"]
         search_on = row["SEARCH_ON"]
 
-        # If SEARCH_ON is empty, use the displayed fruit name.
-        if not search_on:
-            search_on = fruit_name
-
-        fruit_options[fruit_name] = search_on
+        fruit_options[fruit_name] = (
+            search_on if search_on else fruit_name
+        )
 
 except Exception as e:
     st.error("Unable to load fruit options from Snowflake.")
@@ -84,7 +108,7 @@ ingredients_list = st.multiselect(
 
 
 # --------------------------------------------------
-# SMOOTHIEFRUIT API FUNCTION
+# GET NUTRITION DATA FROM SMOOTHIEFROOT API
 # --------------------------------------------------
 
 def get_fruit_nutrition(search_name):
@@ -97,36 +121,27 @@ def get_fruit_nutrition(search_name):
         response = requests.get(url, timeout=15)
 
         if response.status_code != 200:
-            return None, (
-                f"Fruit '{search_name}' was not found "
-                "in the SmoothieFroot database."
-            )
+            return None, "This fruit was not found in the API."
 
         data = response.json()
 
         if isinstance(data, list):
             if not data:
-                return None, "No nutrition data was returned."
+                return None, "No nutrition data available."
             data = data[0]
 
         if not isinstance(data, dict):
-            return None, "Unexpected API response format."
+            return None, "Unexpected API response."
 
-        # Nutrition is usually a nested dictionary.
         nutrition = data.get("nutrition", {})
 
-        if not isinstance(nutrition, dict):
-            return None, "Nutrition information is unavailable."
+        if not isinstance(nutrition, dict) or not nutrition:
+            return None, "No nutrition information available."
 
-        if not nutrition:
-            return None, "No nutrition information is available."
-
-        # Create the workshop-style table:
-        # carbs, fat, protein, sugar as separate rows.
-        table_rows = []
+        rows = []
 
         for nutrient, amount in nutrition.items():
-            table_rows.append({
+            rows.append({
                 "": nutrient,
                 "family": data.get("family", ""),
                 "genus": data.get("genus", ""),
@@ -136,16 +151,16 @@ def get_fruit_nutrition(search_name):
                 "order": data.get("order", "")
             })
 
-        return pd.DataFrame(table_rows), None
+        return pd.DataFrame(rows), None
 
     except requests.RequestException as e:
-        return None, f"API connection failed: {e}"
+        return None, f"API request failed: {e}"
     except (ValueError, TypeError) as e:
-        return None, f"Unable to read API response: {e}"
+        return None, f"Unable to parse API response: {e}"
 
 
 # --------------------------------------------------
-# DISPLAY NUTRITION INFORMATION FOR EACH FRUIT
+# DISPLAY NUTRITION TABLES
 # --------------------------------------------------
 
 if ingredients_list:
@@ -155,7 +170,9 @@ if ingredients_list:
     for fruit_chosen in ingredients_list:
         search_name = fruit_options[fruit_chosen]
 
-        st.subheader(f"{fruit_chosen} Nutrition Information")
+        st.subheader(
+            f"{fruit_chosen} Nutrition Information"
+        )
 
         nutrition_df, error_message = get_fruit_nutrition(
             search_name
@@ -174,7 +191,7 @@ if ingredients_list:
 
 
 # --------------------------------------------------
-# SUBMIT ORDER
+# SUBMIT ORDER TO SNOWFLAKE
 # --------------------------------------------------
 
 if st.button("Submit Order", type="primary"):
@@ -188,14 +205,12 @@ if st.button("Submit Order", type="primary"):
         try:
             ingredients_string = " ".join(ingredients_list)
 
-            insert_statement = """
+            session.sql(
+                """
                 INSERT INTO SMOOTHIES.PUBLIC.ORDERS
                     (NAME_ON_ORDER, INGREDIENTS)
                 VALUES (?, ?)
-            """
-
-            session.sql(
-                insert_statement,
+                """,
                 params=[
                     name_on_order.strip(),
                     ingredients_string
