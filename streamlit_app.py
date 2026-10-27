@@ -130,5 +130,3 @@ if st.button("Submit Order"):
 
         except Exception as error:
             st.error(f"Could not save your order: {error}")
-
-bro tis is my friends code please modify only for which tht i uses private key and then remining give me the ssame code
