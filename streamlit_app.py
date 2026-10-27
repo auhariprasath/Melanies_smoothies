@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 import requests
@@ -7,7 +8,7 @@ from snowflake.snowpark.functions import col
 st.title("🥤 Customize Your Smoothie! 🥤")
 st.write("Choose the fruits you want in your custom Smoothie!")
 
-# Connect to Snowflake
+# Connect to Snowflake - keep your existing connection
 cnx = st.connection("snowflake")
 session = cnx.session()
 
@@ -22,7 +23,7 @@ my_dataframe = session.table(
 # Convert Snowpark DataFrame to Pandas DataFrame
 pd_df = my_dataframe.to_pandas()
 
-# Temporarily display the DataFrame to check its values
+# Display fruit options
 st.dataframe(pd_df, use_container_width=True)
 
 # Customer name
@@ -30,7 +31,8 @@ name_on_order = st.text_input("Name on Smoothie:")
 
 if name_on_order.strip():
     st.write(
-        f"The name on your Smoothie will be: {name_on_order.strip()}"
+        f"The name on your Smoothie will be: "
+        f"{name_on_order.strip()}"
     )
 
 # Choose up to 5 ingredients
@@ -42,15 +44,16 @@ ingredients_list = st.multiselect(
     max_selections=5
 )
 
-# Build order and retrieve nutrition data
+# Build ingredients string and retrieve nutrition data
 ingredients_string = ""
 
 if ingredients_list:
     for fruit_chosen in ingredients_list:
-        # Preserve the display name in the saved order
+
+        # Preserve the original ingredient-building logic
         ingredients_string += fruit_chosen
 
-        # Find the corresponding API search term
+        # Find corresponding API search term
         search_on = pd_df.loc[
             pd_df["FRUIT_NAME"] == fruit_chosen,
             "SEARCH_ON"
@@ -64,35 +67,36 @@ if ingredients_list:
             "."
         )
 
-        st.subheader(fruit_chosen + " Nutrition Information")
+        st.subheader(
+            fruit_chosen + " Nutrition Information"
+        )
 
         try:
-            # Use SEARCH_ON rather than the display label
-            smoothiefroot_response = requests.get(
+            response = requests.get(
                 "https://my.smoothiefroot.com/api/fruit/"
-                + requests.utils.quote(str(search_on), safe=""),
+                + requests.utils.quote(
+                    str(search_on), safe=""
+                ),
                 timeout=10
             )
 
-            if smoothiefroot_response.status_code == 200:
+            if response.status_code == 200:
                 sf_df = pd.json_normalize(
-                    smoothiefroot_response.json()
+                    response.json()
                 )
-
                 st.dataframe(
                     sf_df,
                     use_container_width=True
                 )
 
-            elif smoothiefroot_response.status_code == 404:
+            elif response.status_code == 404:
                 st.info(
                     "Sorry, that fruit is not in our database."
                 )
 
             else:
                 st.warning(
-                    f"API returned HTTP "
-                    f"{smoothiefroot_response.status_code}."
+                    f"API returned HTTP {response.status_code}."
                 )
 
         except requests.RequestException as error:
@@ -100,14 +104,19 @@ if ingredients_list:
                 f"Could not retrieve fruit data: {error}"
             )
 
-    st.write("Your ingredients:", ", ".join(ingredients_list))
+    st.write(
+        "Your ingredients:",
+        ", ".join(ingredients_list)
+    )
 
-# Submit the order
+# Submit order
 if st.button("Submit Order"):
     if not name_on_order.strip():
         st.warning("Please enter your name.")
+
     elif not ingredients_list:
         st.warning("Please select at least one ingredient.")
+
     else:
         try:
             session.sql(
@@ -129,4 +138,7 @@ if st.button("Submit Order"):
             )
 
         except Exception as error:
-            st.error(f"Could not save your order: {error}")
+            st.error(
+                f"Could not save your order: {error}"
+            )
+```
