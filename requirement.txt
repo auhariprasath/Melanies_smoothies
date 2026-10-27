@@ -1,3 +1,4 @@
 request
 streamlit
 snowflake-snowpark-python
+cryptography
