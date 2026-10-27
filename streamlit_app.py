@@ -1,6 +1,9 @@
 
 import base64
+import requests
+import pandas as pd
 import streamlit as st
+
 from snowflake.snowpark import Session
 from snowflake.snowpark.functions import col
 from cryptography.hazmat.primitives import serialization
@@ -22,7 +25,6 @@ st.write("The name on your smoothie will be:", name_on_order)
 def create_session():
     cfg = st.secrets["connections"]["snowflake"]
 
-    # Decode the Base64-encoded private key from Streamlit Secrets
     private_key_bytes = base64.b64decode(cfg["private_key_b64"])
 
     private_key = serialization.load_pem_private_key(
@@ -30,7 +32,6 @@ def create_session():
         password=None,
     )
 
-    # Convert the private key to the DER format Snowflake expects
     private_key_der = private_key.private_bytes(
         encoding=serialization.Encoding.DER,
         format=serialization.PrivateFormat.PKCS8,
@@ -50,6 +51,7 @@ def create_session():
     return Session.builder.configs(connection_parameters).create()
 
 
+# Connect to Snowflake and load fruit options
 try:
     session = create_session()
 
@@ -63,7 +65,6 @@ try:
 
     if not fruit_options:
         st.warning("No fruits found. Check the FRUIT_OPTIONS table.")
-
     else:
         ingredients_list = st.multiselect(
             "Choose up to 5 ingredients:",
@@ -74,10 +75,8 @@ try:
         if st.button("Submit Order", type="primary"):
             if not name_on_order.strip():
                 st.warning("Please enter your name.")
-
             elif not ingredients_list:
                 st.warning("Please choose at least one fruit.")
-
             else:
                 ingredients_string = " ".join(ingredients_list)
 
@@ -103,3 +102,33 @@ try:
 except Exception as e:
     st.error("Unable to connect to Snowflake or load fruits.")
     st.caption(f"Error details: {str(e)}")
+
+
+# SmoothieFroot API: display watermelon nutrition information
+st.divider()
+st.subheader("🍉 SmoothieFroot Nutrition Information")
+
+try:
+    response = requests.get(
+        "https://my.smoothiefroot.com/api/fruit/watermelon",
+        timeout=15,
+    )
+    response.raise_for_status()
+
+    smoothiefruit_data = response.json()
+
+    # Convert the JSON response into a DataFrame
+    smoothiefruit_df = pd.DataFrame([smoothiefruit_data])
+
+    st.dataframe(
+        smoothiefruit_df,
+        use_container_width=True,
+    )
+
+except requests.RequestException as e:
+    st.warning("Unable to retrieve SmoothieFroot API data.")
+    st.caption(f"API error: {str(e)}")
+
+except (ValueError, TypeError) as e:
+    st.warning("The API response could not be converted to a table.")
+    st.caption(f"Response error: {str(e)}")
