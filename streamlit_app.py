@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 import requests
@@ -141,4 +140,3 @@ if st.button("Submit Order"):
             st.error(
                 f"Could not save your order: {error}"
             )
-```
