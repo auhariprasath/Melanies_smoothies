@@ -1,194 +1,212 @@
 
-import base64
-import requests
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import requests
 
 from snowflake.snowpark import Session
 from snowflake.snowpark.functions import col
-from cryptography.hazmat.primitives import serialization
-
 
 # --------------------------------------------------
 # PAGE CONFIGURATION
 # --------------------------------------------------
+
 st.set_page_config(
     page_title="Customize Your Smoothie",
     page_icon="🥤",
-    layout="centered",
+    layout="wide"
 )
 
 st.title("🥤 Customize Your Smoothie! 🥤")
 st.write("Choose the fruits you want in your custom Smoothie!")
 
-
-# --------------------------------------------------
-# SMOOTHIE ORDER INPUTS
-# --------------------------------------------------
-name_on_order = st.text_input("Name on Smoothie:")
-st.write("The name on your smoothie will be:", name_on_order)
-
-
 # --------------------------------------------------
 # SNOWFLAKE CONNECTION
 # --------------------------------------------------
+
 @st.cache_resource
 def create_session():
-    cfg = st.secrets["connections"]["snowflake"]
-
-    private_key_bytes = base64.b64decode(cfg["private_key_b64"])
-
-    private_key = serialization.load_pem_private_key(
-        private_key_bytes,
-        password=None,
+    connection_parameters = dict(
+        st.secrets["connections"]["snowflake"]
     )
 
-    private_key_der = private_key.private_bytes(
-        encoding=serialization.Encoding.DER,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-
-    connection_parameters = {
-        "account": cfg["account"],
-        "user": cfg["user"],
-        "private_key": private_key_der,
-        "role": cfg["role"],
-        "warehouse": cfg["warehouse"],
-        "database": cfg["database"],
-        "schema": cfg["schema"],
-    }
-
-    return Session.builder.configs(connection_parameters).create()
+    return Session.builder.configs(
+        connection_parameters
+    ).create()
 
 
 # --------------------------------------------------
-# LOAD FRUITS AND SUBMIT ORDERS
+# LOAD FRUIT OPTIONS FROM SNOWFLAKE
 # --------------------------------------------------
+
 try:
     session = create_session()
 
     fruit_rows = (
         session.table("SMOOTHIES.PUBLIC.FRUIT_OPTIONS")
-        .select(col("FRUIT_NAME"))
+        .select("FRUIT_NAME", "SEARCH_ON")
         .collect()
     )
 
-    fruit_options = [row["FRUIT_NAME"] for row in fruit_rows]
+    fruit_options = {}
 
-    if not fruit_options:
-        st.warning("No fruits found. Check the FRUIT_OPTIONS table.")
+    for row in fruit_rows:
+        fruit_name = row["FRUIT_NAME"]
+        search_on = row["SEARCH_ON"]
 
-    else:
-        ingredients_list = st.multiselect(
-            "Choose up to 5 ingredients:",
-            options=fruit_options,
-            max_selections=5,
-        )
+        # If SEARCH_ON is empty, use the displayed fruit name.
+        if not search_on:
+            search_on = fruit_name
 
-        if st.button("Submit Order", type="primary"):
-            if not name_on_order.strip():
-                st.warning("Please enter your name.")
-
-            elif not ingredients_list:
-                st.warning("Please choose at least one fruit.")
-
-            else:
-                ingredients_string = " ".join(ingredients_list)
-
-                insert_stmt = """
-                    INSERT INTO SMOOTHIES.PUBLIC.ORDERS
-                    (NAME_ON_ORDER, INGREDIENTS)
-                    VALUES (?, ?)
-                """
-
-                session.sql(
-                    insert_stmt,
-                    params=[
-                        name_on_order.strip(),
-                        ingredients_string,
-                    ],
-                ).collect()
-
-                st.success(
-                    f"Your smoothie is ordered, {name_on_order.strip()}!",
-                    icon="✅",
-                )
+        fruit_options[fruit_name] = search_on
 
 except Exception as e:
-    st.error("Unable to connect to Snowflake or load fruits.")
-    st.caption(f"Error details: {str(e)}")
+    st.error("Unable to load fruit options from Snowflake.")
+    st.code(str(e))
+    st.stop()
 
 
 # --------------------------------------------------
-# SMOOTHIEFROOT API - WATERMELON NUTRITION
+# SMOOTHIE ORDER FORM
 # --------------------------------------------------
-st.divider()
-st.subheader("🍉 SmoothieFroot Nutrition Information")
 
-try:
-    response = requests.get(
-        "https://my.smoothiefroot.com/api/fruit/watermelon",
-        timeout=15,
+name_on_order = st.text_input("Name on Smoothie:")
+
+st.write(
+    "The name on your smoothie will be:",
+    name_on_order
+)
+
+ingredients_list = st.multiselect(
+    "Choose up to 5 ingredients:",
+    options=list(fruit_options.keys()),
+    max_selections=5
+)
+
+
+# --------------------------------------------------
+# SMOOTHIEFRUIT API FUNCTION
+# --------------------------------------------------
+
+def get_fruit_nutrition(search_name):
+    url = (
+        "https://my.smoothiefroot.com/api/fruit/"
+        + requests.utils.quote(search_name, safe="")
     )
-    response.raise_for_status()
 
-    fruit_data = response.json()
+    try:
+        response = requests.get(url, timeout=15)
 
-    # Extract the nested nutrition dictionary
-    nutrition_values = fruit_data.get("nutrition", {})
+        if response.status_code != 200:
+            return None, (
+                f"Fruit '{search_name}' was not found "
+                "in the SmoothieFroot database."
+            )
 
-    # Create one row for each nutrient
-    rows = []
+        data = response.json()
 
-    for nutrient, value in nutrition_values.items():
-        rows.append({
-            "nutrition": nutrient,
-            "family": fruit_data.get("family"),
-            "genus": fruit_data.get("genus"),
-            "id": fruit_data.get("id"),
-            "name": fruit_data.get("name"),
-            "nutrition_value": value,
-            "order": fruit_data.get("order"),
-        })
+        if isinstance(data, list):
+            if not data:
+                return None, "No nutrition data was returned."
+            data = data[0]
 
-    smoothiefruit_df = pd.DataFrame(rows)
+        if not isinstance(data, dict):
+            return None, "Unexpected API response format."
 
-    # Match the workshop's table layout:
-    # nutrient name, family, genus, id, name, value, order
-    if not smoothiefruit_df.empty:
-        smoothiefruit_df = smoothiefruit_df[
-            [
-                "nutrition",
-                "family",
-                "genus",
-                "id",
-                "name",
-                "nutrition_value",
-                "order",
-            ]
-        ]
+        # Nutrition is usually a nested dictionary.
+        nutrition = data.get("nutrition", {})
 
-        # Rename columns to match the workshop screenshot
-        smoothiefruit_df = smoothiefruit_df.rename(
-            columns={
-                "nutrition": "nutrient",
-                "nutrition_value": "nutrition",
-            }
+        if not isinstance(nutrition, dict):
+            return None, "Nutrition information is unavailable."
+
+        if not nutrition:
+            return None, "No nutrition information is available."
+
+        # Create the workshop-style table:
+        # carbs, fat, protein, sugar as separate rows.
+        table_rows = []
+
+        for nutrient, amount in nutrition.items():
+            table_rows.append({
+                "": nutrient,
+                "family": data.get("family", ""),
+                "genus": data.get("genus", ""),
+                "id": data.get("id", ""),
+                "name": data.get("name", search_name),
+                "nutrition": amount,
+                "order": data.get("order", "")
+            })
+
+        return pd.DataFrame(table_rows), None
+
+    except requests.RequestException as e:
+        return None, f"API connection failed: {e}"
+    except (ValueError, TypeError) as e:
+        return None, f"Unable to read API response: {e}"
+
+
+# --------------------------------------------------
+# DISPLAY NUTRITION INFORMATION FOR EACH FRUIT
+# --------------------------------------------------
+
+if ingredients_list:
+    st.divider()
+    st.subheader("🍉 SmoothieFroot Nutrition Information")
+
+    for fruit_chosen in ingredients_list:
+        search_name = fruit_options[fruit_chosen]
+
+        st.subheader(f"{fruit_chosen} Nutrition Information")
+
+        nutrition_df, error_message = get_fruit_nutrition(
+            search_name
         )
 
-        st.dataframe(
-            smoothiefruit_df,
-            hide_index=True,
-            use_container_width=True,
-        )
+        if nutrition_df is not None:
+            st.dataframe(
+                nutrition_df,
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.warning(
+                f"{fruit_chosen}: {error_message}"
+            )
+
+
+# --------------------------------------------------
+# SUBMIT ORDER
+# --------------------------------------------------
+
+if st.button("Submit Order", type="primary"):
+    if not name_on_order.strip():
+        st.warning("Please enter your name.")
+
+    elif not ingredients_list:
+        st.warning("Please choose at least one fruit.")
+
     else:
-        st.warning("No nutrition data was returned by the API.")
+        try:
+            ingredients_string = " ".join(ingredients_list)
 
-except requests.RequestException as e:
-    st.warning("Unable to retrieve SmoothieFroot API data.")
-    st.caption(f"API error: {str(e)}")
+            insert_statement = """
+                INSERT INTO SMOOTHIES.PUBLIC.ORDERS
+                    (NAME_ON_ORDER, INGREDIENTS)
+                VALUES (?, ?)
+            """
 
-except (ValueError, TypeError, KeyError) as e:
-    st.warning("Unable to format the SmoothieFroot API response.")
-    st.caption(f"Response error: {str(e)}")
+            session.sql(
+                insert_statement,
+                params=[
+                    name_on_order.strip(),
+                    ingredients_string
+                ]
+            ).collect()
+
+            st.success(
+                f"Your smoothie is ordered, "
+                f"{name_on_order.strip()}! 🥤"
+            )
+
+        except Exception as e:
+            st.error("Unable to save your smoothie order.")
+            st.code(str(e))
